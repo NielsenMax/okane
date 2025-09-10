@@ -1,9 +1,11 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Parse () where
+module Parse (parse, runP, term, terms, parseFile) where
 
 import Lang hiding (getPos)
-import Text.Parsec hiding (parse, runP)
+import Common
+import Text.Parsec hiding (parse, runP, sepBy1)
+import Text.Parsec (sepBy1, many1, try, optional)
 import qualified Text.Parsec.Token as Tok
 import Text.ParserCombinators.Parsec.Language
 import Prelude hiding (const)
@@ -17,8 +19,8 @@ langDef :: LanguageDef u
 langDef =
   emptyDef
     { commentLine = "--",
-      reservedNames = ["send", "fun", "trx", "run", "from", "to", "max", "remaining", "src", "dst", "coin"],
-      reservedOpNames = [":", "%", "@", ";", "/"]
+      reservedNames = ["send", "trx", "from", "to", "max", "remaining", "account"],
+      reservedOpNames = ["%", "@", ";", "/"]
     }
 
 whiteSpace :: P ()
@@ -130,49 +132,35 @@ send = do
   c <- coin
   SSend s c <$> dsts
 
-param :: P (Param String)
-param = try (PS <$> srcs) <|> try (PD <$> dsts) <|> PC <$> coin
-
-run :: P STerm
-run = do
-  reserved "run"
-  s <- identifier
-  SRun s <$> many param
-
 trx :: P STerm
 trx = do
   reserved "trx"
   STrx <$> braces terms
 
-arg :: P (String, Ty)
-arg = do
-  s <- identifier
-  ( do
-      reserved "src"
-      return (s, TS)
-    ) <|> ( do
-      reserved "dst"
-      return (s, TD)
-    ) <|> ( do
-      reserved "coin"
-      return (s,TC)
-    )
+account :: P STerm
+account = do
+  reserved "account"
+  accountName <- identifier
+  coinName <- identifier
+  amount <- natural
+  return $ SAccount accountName coinName (fromInteger amount)
 
-fun :: P STerm
-fun = do
-  reserved "fun"
-  s <- identifier
-  a <- arg
-  SFun s a <$> braces terms
-
+-- | Parse a term
 term :: P STerm
-term = send <|> fun <|> trx <|> run
+term = send <|> trx <|> account
 
 terms :: P [STerm]
-terms = many term
+terms = term `sepBy1` reservedOp ";"
 
 runP :: P a -> String -> String -> Either ParseError a
 runP p s filename = runParser (whiteSpace *> p <* eof) () filename s
+
+-- | Parse a file containing multiple statements (newline-separated)
+parseFile :: String -> Either ParseError [STerm]
+parseFile content = runP fileTerms content "file"
+  where
+    fileTerms :: P [STerm]
+    fileTerms = many1 (term <* optional newline)
 
 -- para debugging en uso interactivo (ghci)
 parse :: String -> STerm

@@ -4,7 +4,7 @@
 N ::= n% (numeros entre 1 y 100)
     | n/n (n numeros enteros)
 
-C ::= [ STRING n ] (STRING es una cadena de caracteres en matyuscula puede terminar en /n para indicar la precision, n es un numero entero)
+C ::= [ STRING ] (STRING es una cadena de caracteres en mayusculas)
 
 S' ::= @x | { S }
 
