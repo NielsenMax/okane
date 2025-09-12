@@ -6,6 +6,7 @@ import Test.HUnit
 import Lang
 import Parse (runP, term, parseFile)
 import Eval (runEval, runEvalWithState, runEvalStatements, showAccounts, initAccount, initialState, EvalState(..))
+import qualified Errors as E
 import Data.Map (Map)
 import qualified Data.Map as Map
 
@@ -29,9 +30,9 @@ mkState accountsList = EvalState $ Map.fromList $ map (\(name, coin, amount) -> 
 -- Basic parsing tests
 testBasicSend :: Test
 testBasicSend = TestCase $ do
-  assertParse "send alice [USD 100] bob"
+  assertParse "send alice [USD 100] bob" 
     (SSend [SAcc "alice"] (Coin "USD" 100) [DAcc "bob"])
-
+  
 testTransaction :: Test
 testTransaction = TestCase $ do
   assertParse "trx { send alice [USD 100] bob; send bob [USD 50] charlie }"
@@ -58,7 +59,7 @@ testBasicSendEval = TestCase $ do
 testTransactionEval :: Test
 testTransactionEval = TestCase $ do
   let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 500), ("charlie", "USD", 200)]
-  let stm = STrx [SSend [SAcc "alice"] (Coin "USD" 100) [DAcc "bob"],
+  let stm = STrx [SSend [SAcc "alice"] (Coin "USD" 100) [DAcc "bob"], 
                   SSend [SAcc "bob"] (Coin "USD" 50) [DAcc "charlie"]]
   case runEvalWithState stm initState of
     Right finalState -> do
@@ -147,8 +148,8 @@ testComplexSendParse = TestCase $ do
 
 testComplexSendEval :: Test
 testComplexSendEval = TestCase $ do
-  -- Test percentage send (50% of 100 = 50)
-  let stm1 = SSend [SPerc (Perc 50) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  -- Test percentage send (100% of 100 = 100)
+  let stm1 = SSend [SPerc (Perc 100) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
   let initState1 = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
   case runEvalWithState stm1 initState1 of
     Right result1 -> do
@@ -158,12 +159,12 @@ testComplexSendEval = TestCase $ do
       let bobBalance1 = case Map.lookup "bob" (accounts result1) of
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
-      assertEqual "Alice should have 950 USD after 50% of 100 send" 950 aliceBalance1
+      assertEqual "Alice should have 900 USD after 100% of 100 send" 900 aliceBalance1
       assertEqual "Bob should have 100 USD after receiving" 100 bobBalance1
     Left err -> assertFailure $ "Percentage send failed: " ++ show err
 
-  -- Test fraction send (1/3 of 100 = 33)
-  let stm2 = SSend [SPerc (Rat 1 3) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  -- Test fraction send (1/1 of 100 = 100%)
+  let stm2 = SSend [SPerc (Rat 1 1) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
   let initState2 = mkState [("alice", "USD", 900), ("bob", "USD", 0)]
   case runEvalWithState stm2 initState2 of
     Right result2 -> do
@@ -173,7 +174,7 @@ testComplexSendEval = TestCase $ do
       let bobBalance2 = case Map.lookup "bob" (accounts result2) of
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
-      assertEqual "Alice should have 867 USD after 1/3 of 100 send" 867 aliceBalance2
+      assertEqual "Alice should have 800 USD after 1/1 of 100 send" 800 aliceBalance2
       assertEqual "Bob should have 100 USD after receiving" 100 bobBalance2
     Left err -> assertFailure $ "Fraction send failed: " ++ show err
 
@@ -209,8 +210,8 @@ testComplexSendEval = TestCase $ do
 
 testMultipleSourcesDestinations :: Test
 testMultipleSourcesDestinations = TestCase $ do
-  -- Test multiple sources with percentage (25% of 100 = 25, split between 2 sources = 12 each)
-  let stm1 = SSend [SPerc (Perc 25) [SAcc "alice", SAcc "bob"]] (Coin "USD" 100) [DAcc "charlie"]
+  -- Test multiple sources with percentage (100% of 100 = 100, split between 2 sources = 50 each)
+  let stm1 = SSend [SPerc (Perc 100) [SAcc "alice", SAcc "bob"]] (Coin "USD" 100) [DAcc "charlie"]
   let initState1 = mkState [("alice", "USD", 1000), ("bob", "USD", 800), ("charlie", "USD", 0)]
   case runEvalWithState stm1 initState1 of
     Right result1 -> do
@@ -223,8 +224,8 @@ testMultipleSourcesDestinations = TestCase $ do
       let charlieBalance1 = case Map.lookup "charlie" (accounts result1) of
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
-      assertEqual "Alice should have 988 USD after 25% of 100 send" 988 aliceBalance1
-      assertEqual "Bob should have 788 USD after 25% of 100 send" 788 bobBalance1
+      assertEqual "Alice should have 950 USD after 100% of 100 send" 950 aliceBalance1
+      assertEqual "Bob should have 750 USD after 100% of 100 send" 750 bobBalance1
       assertEqual "Charlie should have 100 USD after receiving" 100 charlieBalance1
     Left err -> assertFailure $ "Multiple sources percentage send failed: " ++ show err
 
@@ -270,6 +271,44 @@ testMultipleSourcesDestinations = TestCase $ do
       assertEqual "David should have 100 USD after receiving full amount" 100 davidBalance3
     Left err -> assertFailure $ "Complex multiple sources/destinations send failed: " ++ show err
 
+testPercentageValidation :: Test
+testPercentageValidation = TestCase $ do
+  -- Test valid 100% percentage
+  let stm1 = SSend [SPerc (Perc 100) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  let initState1 = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  case runEvalWithState stm1 initState1 of
+    Right _ -> return () -- Should succeed
+    Left err -> assertFailure $ "100% percentage should be valid: " ++ show err
+
+  -- Test invalid percentage (75% doesn't add up to 100%)
+  let stm2 = SSend [SPerc (Perc 75) [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  let initState2 = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  case runEvalWithState stm2 initState2 of
+    Right _ -> assertFailure "75% percentage should be invalid"
+    Left (E.InvalidPercentageSum 75 100) -> return () -- Should fail with correct error
+    Left err -> assertFailure $ "Expected InvalidPercentageSum error, got: " ++ show err
+
+  -- Test valid max amount (100% of transfer amount)
+  let stm3 = SSend [SMax 100 [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  let initState3 = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  case runEvalWithState stm3 initState3 of
+    Right _ -> return () -- Should succeed
+    Left err -> assertFailure $ "Max 100 should be valid: " ++ show err
+
+  -- Test valid remaining (always valid)
+  let stm4 = SSend [SRem [SAcc "alice"]] (Coin "USD" 100) [DAcc "bob"]
+  let initState4 = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  case runEvalWithState stm4 initState4 of
+    Right _ -> return () -- Should succeed
+    Left err -> assertFailure $ "Remaining should be valid: " ++ show err
+
+  -- Test valid combination: 50% + max 50 (100% total)
+  let stm5 = SSend [SPerc (Perc 50) [SAcc "alice"], SMax 50 [SAcc "bob"]] (Coin "USD" 100) [DAcc "charlie"]
+  let initState5 = mkState [("alice", "USD", 1000), ("bob", "USD", 1000), ("charlie", "USD", 0)]
+  case runEvalWithState stm5 initState5 of
+    Right _ -> return () -- Should succeed
+    Left err -> assertFailure $ "50% + max 50 should be valid: " ++ show err
+
 -- Test suite
 tests :: Test
 tests = TestList
@@ -282,6 +321,7 @@ tests = TestList
   , TestLabel "Account Eval" testAccountEval
   , TestLabel "Complex Send Eval" testComplexSendEval
   , TestLabel "Multiple Sources/Destinations" testMultipleSourcesDestinations
+  , TestLabel "Percentage Validation" testPercentageValidation
   , TestLabel "File Parsing" testFileParsing
   , TestLabel "Complete Example" testCompleteExample
   ]

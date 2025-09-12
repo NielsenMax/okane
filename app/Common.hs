@@ -1,6 +1,5 @@
 module Common where
 
-import Data.List.Extra (nubSort)
 
 type Pos = Int
 type Name = String

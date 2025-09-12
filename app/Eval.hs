@@ -70,67 +70,192 @@ subBalance account coin amount = do
 
 -- | Evaluate a source to get the amount to transfer
 evalSrc :: Src String -> String -> StateT EvalState (Except EvalError) Int
-evalSrc (SAcc account) coin = getBalance account coin
-evalSrc (SPerc perc srcs) coin = do
+evalSrc (SSingle account) coin = getBalance account coin
+evalSrc (SMultiple connector) coin = evalSrcConnector connector coin
+
+-- | Evaluate a source connector
+evalSrcConnector :: SrcConnector String -> String -> StateT EvalState (Except EvalError) Int
+evalSrcConnector (SConnPerc perc source) coin = do
   case validatePercentage perc of
     Left err -> throwError err
     Right _ -> do
-      totalAmount <- sum <$> mapM (`evalSrc` coin) srcs
+      totalAmount <- evalSrc source coin
       return $ calcPercentage perc totalAmount
-evalSrc (SMax maxAmount srcs) coin = do
-  availableAmount <- sum <$> mapM (`evalSrc` coin) srcs
+evalSrcConnector (SConnMax maxAmount source) coin = do
+  availableAmount <- evalSrc source coin
   return $ min maxAmount availableAmount
-evalSrc (SRem srcs) coin = do
-  totalAmount <- sum <$> mapM (`evalSrc` coin) srcs
+evalSrcConnector (SConnRem source) coin = do
+  totalAmount <- evalSrc source coin
   return totalAmount
 
 -- | Transfer from a source
 transferFromSrc :: Src String -> String -> Int -> StateT EvalState (Except EvalError) ()
-transferFromSrc (SAcc account) coin amount = subBalance account coin amount
-transferFromSrc (SPerc perc srcs) coin amount = do
+transferFromSrc (SSingle account) coin amount = subBalance account coin amount
+transferFromSrc (SMultiple connector) coin amount = transferFromSrcConnector connector coin amount
+
+-- | Transfer from a source connector
+transferFromSrcConnector :: SrcConnector String -> String -> Int -> StateT EvalState (Except EvalError) ()
+transferFromSrcConnector (SConnPerc perc source) coin amount = do
   case validatePercentage perc of
     Left err -> throwError err
     Right _ -> do
       let totalAmount = calcPercentage perc amount
-      let perSrcAmount = if null srcs then 0 else totalAmount `div` length srcs
-      mapM_ (\src -> transferFromSrc src coin perSrcAmount) srcs
-transferFromSrc (SMax maxAmount srcs) coin amount = do
+      transferFromSrc source coin totalAmount
+transferFromSrcConnector (SConnMax maxAmount source) coin amount = do
   let transferAmount = min maxAmount amount
-  let perSrcAmount = if null srcs then 0 else transferAmount `div` length srcs
-  mapM_ (\src -> transferFromSrc src coin perSrcAmount) srcs
-transferFromSrc (SRem srcs) coin amount = do
-  let perSrcAmount = if null srcs then 0 else amount `div` length srcs
-  mapM_ (\src -> transferFromSrc src coin perSrcAmount) srcs
+  transferFromSrc source coin transferAmount
+transferFromSrcConnector (SConnRem source) coin amount = do
+  transferFromSrc source coin amount
 
 -- | Transfer to a destination
 transferToDst :: Dst String -> String -> Int -> StateT EvalState (Except EvalError) ()
-transferToDst (DAcc account) coin amount = addBalance account coin amount
-transferToDst (DPerc perc dsts) coin amount = do
+transferToDst (DSingle account) coin amount = addBalance account coin amount
+transferToDst (DMultiple connector) coin amount = transferToDstConnector connector coin amount
+
+-- | Transfer to a destination connector
+transferToDstConnector :: DstConnector String -> String -> Int -> StateT EvalState (Except EvalError) ()
+transferToDstConnector (DConnPerc perc destination) coin amount = do
   case validatePercentage perc of
     Left err -> throwError err
     Right _ -> do
       let distributedAmount = calcPercentage perc amount
-      let perDstAmount = if null dsts then 0 else distributedAmount `div` length dsts
-      mapM_ (\dst -> transferToDst dst coin perDstAmount) dsts
-transferToDst (DRem dsts) coin amount = do
-  let perDstAmount = if null dsts then 0 else amount `div` length dsts
-  mapM_ (\dst -> transferToDst dst coin perDstAmount) dsts
+      transferToDst destination coin distributedAmount
+transferToDstConnector (DConnRem destination) coin amount = do
+  transferToDst destination coin amount
+
+-- | Calculate the maximum possible amount that can be withdrawn from a source
+-- This uses the maximum values for all max expressions, but doesn't check account balances
+calcMaxAmount :: Src String -> Int -> Either EvalError Int
+calcMaxAmount (SSingle _) totalAmount = Right totalAmount  -- Single account can contribute up to total amount
+calcMaxAmount (SMultiple connector) totalAmount = calcMaxAmountConnector connector totalAmount
+
+-- | Calculate maximum amount for a source connector
+calcMaxAmountConnector :: SrcConnector String -> Int -> Either EvalError Int
+calcMaxAmountConnector (SConnPerc perc source) totalAmount = do
+  case validatePercentage perc of
+    Left err -> Left err  -- Throw error immediately for invalid percentage
+    Right _ -> do
+      maxFromSource <- calcMaxAmount source totalAmount
+      return $ calcPercentage perc maxFromSource
+calcMaxAmountConnector (SConnMax maxAmount source) totalAmount = do
+  maxFromSource <- calcMaxAmount source totalAmount
+  return $ min maxAmount maxFromSource  -- Return actual max amount, not 100%
+calcMaxAmountConnector (SConnRem source) totalAmount = do
+  maxFromSource <- calcMaxAmount source totalAmount
+  return maxFromSource
+
+-- | Calculate the minimum possible amount that can be withdrawn from a source
+-- This uses 0 for all max expressions (they contribute nothing)
+calcMinAmount :: Src String -> Int -> Either EvalError Int
+calcMinAmount (SSingle _) totalAmount = Right 0  -- Single account can contribute 0
+calcMinAmount (SMultiple connector) totalAmount = calcMinAmountConnector connector totalAmount
+
+-- | Calculate minimum amount for a source connector
+calcMinAmountConnector :: SrcConnector String -> Int -> Either EvalError Int
+calcMinAmountConnector (SConnPerc perc source) totalAmount = do
+  case validatePercentage perc of
+    Left err -> Left err  -- Throw error immediately for invalid percentage
+    Right _ -> do
+      minFromSource <- calcMinAmount source totalAmount
+      return $ calcPercentage perc minFromSource
+calcMinAmountConnector (SConnMax _ source) totalAmount = do
+  minFromSource <- calcMinAmount source totalAmount
+  return 0  -- Max expressions contribute 0 to minimum
+calcMinAmountConnector (SConnRem source) totalAmount = do
+  minFromSource <- calcMinAmount source totalAmount
+  return minFromSource
+
+-- | Validate that the source percentage expressions are valid
+-- This checks both that we don't exceed 100% (max amount >= total amount) 
+-- and that we don't fall short of 100% (min amount <= total amount)
+validateSourcePercentages :: Src String -> Int -> Either EvalError ()
+validateSourcePercentages src totalAmount = do
+  maxAmount <- calcMaxAmount src totalAmount
+  minAmount <- calcMinAmount src totalAmount
+  
+  -- Check if we're trying to withdraw more than the maximum possible (over 100%)
+  if maxAmount < totalAmount
+    then Left $ E.InvalidPercentageSum (maxAmount * 100 `div` totalAmount) 100
+    -- Check if we're trying to withdraw less than the minimum possible (under 100%)
+    else if minAmount > totalAmount
+    then Left $ E.InvalidPercentageSum (minAmount * 100 `div` totalAmount) 100
+    else Right ()
+
+-- | Calculate the maximum possible amount that can be distributed to a destination
+-- This uses the maximum values for all percentage expressions
+calcMaxDestinationAmount :: Dst String -> Int -> Either EvalError Int
+calcMaxDestinationAmount (DSingle _) totalAmount = Right totalAmount  -- Single account can receive up to total amount
+calcMaxDestinationAmount (DMultiple connector) totalAmount = calcMaxDestinationAmountConnector connector totalAmount
+
+-- | Calculate maximum destination amount for a destination connector
+calcMaxDestinationAmountConnector :: DstConnector String -> Int -> Either EvalError Int
+calcMaxDestinationAmountConnector (DConnPerc perc destination) totalAmount = do
+  case validatePercentage perc of
+    Left err -> Left err  -- Throw error immediately for invalid percentage
+    Right _ -> do
+      maxToDestination <- calcMaxDestinationAmount destination totalAmount
+      return $ calcPercentage perc maxToDestination
+calcMaxDestinationAmountConnector (DConnRem destination) totalAmount = do
+  maxToDestination <- calcMaxDestinationAmount destination totalAmount
+  return maxToDestination
+
+-- | Calculate the minimum possible amount that can be distributed to a destination
+-- This uses 0 for all percentage expressions (they contribute nothing)
+calcMinDestinationAmount :: Dst String -> Int -> Either EvalError Int
+calcMinDestinationAmount (DSingle _) totalAmount = Right 0  -- Single account can receive 0
+calcMinDestinationAmount (DMultiple connector) totalAmount = calcMinDestinationAmountConnector connector totalAmount
+
+-- | Calculate minimum destination amount for a destination connector
+calcMinDestinationAmountConnector :: DstConnector String -> Int -> Either EvalError Int
+calcMinDestinationAmountConnector (DConnPerc perc destination) totalAmount = do
+  case validatePercentage perc of
+    Left err -> Left err  -- Throw error immediately for invalid percentage
+    Right _ -> do
+      minToDestination <- calcMinDestinationAmount destination totalAmount
+      return $ calcPercentage perc minToDestination
+calcMinDestinationAmountConnector (DConnRem destination) totalAmount = do
+  minToDestination <- calcMinDestinationAmount destination totalAmount
+  return minToDestination
+
+-- | Validate that the destination percentage expressions are valid
+-- This checks both that we don't exceed 100% (max amount >= total amount) 
+-- and that we don't fall short of 100% (min amount <= total amount)
+validateDestinationPercentages :: Dst String -> Int -> Either EvalError ()
+validateDestinationPercentages dst totalAmount = do
+  maxAmount <- calcMaxDestinationAmount dst totalAmount
+  minAmount <- calcMinDestinationAmount dst totalAmount
+  
+  -- Check if we're trying to distribute more than the maximum possible (over 100%)
+  if maxAmount < totalAmount
+    then Left $ E.InvalidPercentageSum (maxAmount * 100 `div` totalAmount) 100
+    -- Check if we're trying to distribute less than the minimum possible (under 100%)
+    else if minAmount > totalAmount
+    then Left $ E.InvalidPercentageSum (minAmount * 100 `div` totalAmount) 100
+    else Right ()
 
 -- | Evaluate a statement
 evalStm :: STerm -> StateT EvalState (Except EvalError) ()
-evalStm (SSend srcs coin dsts) = do
+evalStm (SSend src coin dst) = do
   (coinName, amount) <- case coin of
         Coin name amt -> return (name, amt)
-  -- Calculate total amount available from sources
-  totalFromSrcs <- sum <$> mapM (`evalSrc` coinName) srcs
-  -- Check if we have enough funds
-  if totalFromSrcs < amount
-    then throwError $ E.InsufficientFunds "sources" coinName amount totalFromSrcs
-    else do
-      -- Transfer from source accounts
-      mapM_ (\src -> transferFromSrc src coinName amount) srcs
-      -- Transfer to destination accounts
-      mapM_ (\dst -> transferToDst dst coinName amount) dsts
+  -- Validate that the source percentage expressions are valid
+  case validateSourcePercentages src amount of
+    Left err -> throwError err
+    Right _ -> do
+      -- Validate that the destination percentage expressions are valid
+      case validateDestinationPercentages dst amount of
+        Left err -> throwError err
+        Right _ -> do
+          -- Calculate total amount available from source
+          totalFromSrc <- evalSrc src coinName
+          -- Check if we have enough funds
+          if totalFromSrc < amount
+            then throwError $ E.InsufficientFunds "sources" coinName amount totalFromSrc
+            else do
+              -- Transfer from source account
+              transferFromSrc src coinName amount
+              -- Transfer to destination account
+              transferToDst dst coinName amount
 evalStm (STrx stms) = do
   -- Save checkpoint before executing transaction
   checkpoint <- get

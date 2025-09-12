@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Parse (parse, runP, term, terms, parseFile) where
 
 import Lang hiding (getPos)
@@ -20,7 +18,7 @@ langDef =
   emptyDef
     { commentLine = "--",
       reservedNames = ["send", "trx", "from", "to", "max", "remaining", "account"],
-      reservedOpNames = ["%", "@", ";", "/"]
+      reservedOpNames = ["%", "@", ";", "/", ","]
     }
 
 whiteSpace :: P ()
@@ -76,61 +74,62 @@ perc =
 src :: P (Src String)
 src =
   ( do
-      p <- perc
-      reserved "from"
-      SPerc p <$> srcs
+      SSingle <$> identifier
   )
+    <|> ( do
+            conns <- sepBy1 srcConnector (reservedOp ",")
+            return $ SMultiple conns
+        )
+
+srcConnector :: P (SrcConnector String)
+srcConnector =
+  ( do
+            p <- perc
+            reserved "from"
+            SConnPerc p <$> src
+        )
     <|> ( do
             reserved "max"
             n <- num
             reserved "from"
-            SMax n <$> srcs
-        )
-    <|> ( SAcc <$> identifier
+            SConnMax n <$> src
         )
     <|> ( do
-          reserved "remaining"
-          reserved "from"
-          SRem <$> srcs
+            reserved "remaining"
+            reserved "from"
+            SConnRem <$> src
         )
 
-srcs :: P (Srcs String)
-srcs =
-  ( do
-      a <- identifier
-      return [SAcc a]
-  )
-    <|> braces (many src)
 
 dst :: P (Dst String)
 dst =
   ( do
-      p <- perc
-      reserved "to"
-      DPerc p <$> dsts
+      DSingle <$> identifier
   )
-    <|> DAcc
-    <$> identifier
     <|> ( do
-          reserved "remaining"
-          reserved "to"
-          DRem <$> dsts
+            conns <- sepBy1 dstConnector (reservedOp ",")
+            return $ DMultiple conns
         )
 
-dsts :: P (Dsts String)
-dsts =
+dstConnector :: P (DstConnector String)
+dstConnector =
   ( do
-      a <- identifier
-      return [DAcc a]
-  )
-    <|> braces (many dst)
+  p <- perc
+  reserved "to"
+  DConnPerc p <$> dst)
+    <|> ( do
+            reserved "remaining"
+            reserved "to"
+            DConnRem <$> dst
+          )
+
 
 send :: P STerm
 send = do
   reserved "send"
-  s <- srcs
+  s <- src
   c <- coin
-  SSend s c <$> dsts
+  SSend s c <$> dst
 
 trx :: P STerm
 trx = do
@@ -142,8 +141,7 @@ account = do
   reserved "account"
   accountName <- identifier
   coinName <- identifier
-  amount <- natural
-  return $ SAccount accountName coinName (fromInteger amount)
+  SAccount accountName coinName . fromInteger <$> natural
 
 -- | Parse a term
 term :: P STerm

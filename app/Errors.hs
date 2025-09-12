@@ -9,6 +9,7 @@ data OkaneError
   | UnknownAccount String
   | DivisionByZero
   | InvalidPercentage Int
+  | InvalidPercentageSum Int Int  -- actual percentage, expected percentage
   | ParseError String
   deriving (Show)
 
