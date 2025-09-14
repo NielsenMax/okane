@@ -210,7 +210,7 @@ testComplexSendEval = TestCase $ do
 
 testMultipleSourcesDestinations :: Test
 testMultipleSourcesDestinations = TestCase $ do
-  -- Test multiple sources with percentage (100% of 100 = 100, split between 2 sources = 50 each)
+  -- Test single source with percentage (100% of 100 = 100 from alice only)
   let stm1 = SSend (SMultiple [SConnPerc (Perc 100) (SSingle "alice")]) (Coin "USD" 100) (DSingle "charlie")
   let initState1 = mkState [("alice", "USD", 1000), ("bob", "USD", 800), ("charlie", "USD", 0)]
   case runEvalWithState stm1 initState1 of
@@ -224,12 +224,12 @@ testMultipleSourcesDestinations = TestCase $ do
       let charlieBalance1 = case Map.lookup "charlie" result1 of
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
-      assertEqual "Alice should have 950 USD after 100% of 100 send" 950 aliceBalance1
-      assertEqual "Bob should have 750 USD after 100% of 100 send" 750 bobBalance1
+      assertEqual "Alice should have 900 USD after 100% of 100 send" 900 aliceBalance1
+      assertEqual "Bob should have 800 USD (unchanged)" 800 bobBalance1
       assertEqual "Charlie should have 100 USD after receiving" 100 charlieBalance1
-    Left err -> assertFailure $ "Multiple sources percentage send failed: " ++ show err
+    Left err -> assertFailure $ "Single source percentage send failed: " ++ show err
 
-  -- Test multiple destinations (each gets full amount)
+  -- Test multiple destinations with remaining (only first gets the full amount)
   let stm2 = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnRem (DSingle "bob"), DConnRem (DSingle "charlie")])
   let initState2 = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0)]
   case runEvalWithState stm2 initState2 of
@@ -244,12 +244,12 @@ testMultipleSourcesDestinations = TestCase $ do
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
       assertEqual "Alice should have 900 USD after sending to multiple destinations" 900 aliceBalance2
-      assertEqual "Bob should have 100 USD after receiving full amount" 100 bobBalance2
-      assertEqual "Charlie should have 100 USD after receiving full amount" 100 charlieBalance2
+      assertEqual "Bob should have 100 USD (gets all remaining - first destination)" 100 bobBalance2
+      assertEqual "Charlie should have 0 USD (no remaining left for second destination)" 0 charlieBalance2
     Left err -> assertFailure $ "Multiple destinations send failed: " ++ show err
 
-  -- Test complex case: multiple sources with max, multiple destinations
-  let stm3 = SSend (SMultiple [SConnMax 150 (SSingle "alice")]) (Coin "USD" 100) (DMultiple [DConnRem (DSingle "charlie"), DConnRem (DSingle "david")])
+  -- Test simple case: single source with max, single destination
+  let stm3 = SSend (SMultiple [SConnMax 150 (SSingle "alice")]) (Coin "USD" 100) (DSingle "charlie")
   let initState3 = mkState [("alice", "USD", 1000), ("bob", "USD", 800), ("charlie", "USD", 0), ("david", "USD", 0)]
   case runEvalWithState stm3 initState3 of
     Right result3 -> do
@@ -265,11 +265,11 @@ testMultipleSourcesDestinations = TestCase $ do
       let davidBalance3 = case Map.lookup "david" result3 of
             Just coins -> Map.findWithDefault 0 "USD" coins
             Nothing -> 0
-      assertEqual "Alice should have 950 USD after max send" 950 aliceBalance3
-      assertEqual "Bob should have 750 USD after max send" 750 bobBalance3
-      assertEqual "Charlie should have 100 USD after receiving full amount" 100 charlieBalance3
-      assertEqual "David should have 100 USD after receiving full amount" 100 davidBalance3
-    Left err -> assertFailure $ "Complex multiple sources/destinations send failed: " ++ show err
+      assertEqual "Alice should have 900 USD after max send (1000 - 100)" 900 aliceBalance3
+      assertEqual "Bob should have 800 USD (unchanged)" 800 bobBalance3
+      assertEqual "Charlie should have 100 USD after receiving" 100 charlieBalance3
+      assertEqual "David should have 0 USD (unchanged)" 0 davidBalance3
+    Left err -> assertFailure $ "Simple max send failed: " ++ show err
 
 testPercentageValidation :: Test
 testPercentageValidation = TestCase $ do
@@ -308,6 +308,334 @@ testPercentageValidation = TestCase $ do
     Right _ -> return () -- Should succeed
     Left err -> assertFailure $ "50% + max 50 should be valid: " ++ show err
 
+-- Advanced complex tests
+testMultipleCoins :: Test
+testMultipleCoins = TestCase $ do
+  -- Test accounts with multiple coin types
+  let initState = Map.fromList [("alice", Map.fromList [("USD", 1000), ("EUR", 500)]), 
+                                ("bob", Map.fromList [("USD", 200), ("EUR", 300)])]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceUSD = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let aliceEUR = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "EUR" coins
+            Nothing -> 0
+      let bobUSD = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobEUR = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "EUR" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceUSD
+      assertEqual "Alice should still have 500 EUR" 500 aliceEUR
+      assertEqual "Bob should have 300 USD" 300 bobUSD
+      assertEqual "Bob should still have 300 EUR" 300 bobEUR
+    Left err -> assertFailure $ "Multiple coins test failed: " ++ show err
+
+testInsufficientFunds :: Test
+testInsufficientFunds = TestCase $ do
+  -- Test insufficient funds error
+  let initState = mkState [("alice", "USD", 50)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with insufficient funds"
+    Left _ -> return () -- Should fail with error
+
+testZeroAmount :: Test
+testZeroAmount = TestCase $ do
+  -- Test zero amount transfer
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 0) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should still have 1000 USD" 1000 aliceBalance
+      assertEqual "Bob should still have 0 USD" 0 bobBalance
+    Left err -> assertFailure $ "Zero amount test failed: " ++ show err
+
+testComplexPercentage :: Test
+testComplexPercentage = TestCase $ do
+  -- Test complex percentage calculation (50% of 200 = 100 from alice, 50% of 200 = 100 from charlie)
+  let initState = mkState [("alice", "USD", 1000), ("charlie", "USD", 1000), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnPerc (Perc 50) (SSingle "alice"), SConnPerc (Perc 50) (SSingle "charlie")]) (Coin "USD" 200) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD (1000 - 100)" 900 aliceBalance
+      assertEqual "Charlie should have 900 USD (1000 - 100)" 900 charlieBalance
+      assertEqual "Bob should have 200 USD (100 + 100)" 200 bobBalance
+    Left err -> assertFailure $ "Complex percentage test failed: " ++ show err
+
+testMaxAmount :: Test
+testMaxAmount = TestCase $ do
+  -- Test max amount (max 50 from alice, max 50 from charlie = 100 total)
+  let initState = mkState [("alice", "USD", 1000), ("charlie", "USD", 1000), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnMax 50 (SSingle "alice"), SConnMax 50 (SSingle "charlie")]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 950 USD (1000 - 50)" 950 aliceBalance
+      assertEqual "Charlie should have 950 USD (1000 - 50)" 950 charlieBalance
+      assertEqual "Bob should have 100 USD (50 + 50)" 100 bobBalance
+    Left err -> assertFailure $ "Max amount test failed: " ++ show err
+
+testRemainingAmount :: Test
+testRemainingAmount = TestCase $ do
+  -- Test remaining amount (75 from alice + 25 from charlie = 100 total)
+  let initState = mkState [("alice", "USD", 75), ("charlie", "USD", 25), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnRem (SSingle "alice"), SConnRem (SSingle "charlie")]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 0 USD (all sent)" 0 aliceBalance
+      assertEqual "Charlie should have 0 USD (all sent)" 0 charlieBalance
+      assertEqual "Bob should have 100 USD (75 + 25)" 100 bobBalance
+    Left err -> assertFailure $ "Remaining amount test failed: " ++ show err
+
+testComplexTransactionChain :: Test
+testComplexTransactionChain = TestCase $ do
+  -- Test a complex chain of transactions
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 500), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let stm1 = SSend (SSingle "alice") (Coin "USD" 200) (DSingle "charlie")
+  let stm2 = SSend (SSingle "bob") (Coin "USD" 100) (DSingle "david")
+  let stm3 = SSend (SSingle "charlie") (Coin "USD" 50) (DSingle "david")
+  let transactions = [stm1, stm2, stm3]
+  case runEvalStatements transactions initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 800 USD" 800 aliceBalance
+      assertEqual "Bob should have 400 USD" 400 bobBalance
+      assertEqual "Charlie should have 150 USD" 150 charlieBalance
+      assertEqual "David should have 150 USD" 150 davidBalance
+    Left err -> assertFailure $ "Complex transaction chain failed: " ++ show err
+
+testAccountCreation :: Test
+testAccountCreation = TestCase $ do
+  -- Test account creation
+  let initState = Map.empty
+  let stm = SAccount "alice" "USD" 1000
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 1000 USD" 1000 aliceBalance
+    Left err -> assertFailure $ "Account creation failed: " ++ show err
+
+testMultipleDestinationsWithRemaining :: Test
+testMultipleDestinationsWithRemaining = TestCase $ do
+  -- Test multiple destinations with remaining distribution
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnRem (DSingle "bob"), DConnRem (DSingle "charlie")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 100 USD" 100 bobBalance
+      assertEqual "Charlie should have 0 USD (no remaining left for second destination)" 0 charlieBalance
+    Left err -> assertFailure $ "Multiple destinations with remaining failed: " ++ show err
+
+testInsufficientSourceAmount :: Test
+testInsufficientSourceAmount = TestCase $ do
+  -- Test failure when sources don't provide enough to reach the total amount
+  -- Alice has 50, Charlie has 30, but we need 100 total
+  let initState = mkState [("alice", "USD", 50), ("charlie", "USD", 30), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnRem (SSingle "alice"), SConnRem (SSingle "charlie")]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with insufficient source amount"
+    Left _ -> return () -- Expected error
+
+testInsufficientSourceAmountPercentage :: Test
+testInsufficientSourceAmountPercentage = TestCase $ do
+  -- Test failure when percentage sources don't provide enough to reach the total amount
+  -- 50% of 100 = 50 from alice, but we need 100 total (missing 50)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnPerc (Perc 50) (SSingle "alice")]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with insufficient source amount (only 50% provided)"
+    Left _ -> return () -- Expected error
+
+testInsufficientSourceAmountMax :: Test
+testInsufficientSourceAmountMax = TestCase $ do
+  -- Test failure when max amount sources don't provide enough to reach the total amount
+  -- Max 30 from alice, but we need 100 total (missing 70)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0)]
+  let stm = SSend (SMultiple [SConnMax 30 (SSingle "alice")]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with insufficient source amount (max 30, need 100)"
+    Left _ -> return () -- Expected error
+
+testIncompleteDestinationConsumption :: Test
+testIncompleteDestinationConsumption = TestCase $ do
+  -- Test failure when destinations don't consume the full amount
+  -- Send 100 USD, but destinations only consume 60 USD (50% of 100 = 50 + 10 fixed = 60)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Perc 50) (DSingle "bob"), DConnPerc (Perc 10) (DSingle "charlie")])
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with incomplete destination consumption (only 60% consumed)"
+    Left _ -> return () -- Expected error
+
+testIncompleteDestinationConsumptionPercentage :: Test
+testIncompleteDestinationConsumptionPercentage = TestCase $ do
+  -- Test failure when destinations don't consume the full amount
+  -- Send 100 USD, but destinations only consume 60 USD (50% + 10% = 60%)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Perc 50) (DSingle "bob"), DConnPerc (Perc 10) (DSingle "charlie")])
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with incomplete destination consumption (50% + 10% = 60%, need 100%)"
+    Left _ -> return () -- Expected error
+
+testNestedSources :: Test
+testNestedSources = TestCase $ do
+  -- Test nested sources: SMultiple containing another SMultiple
+  -- This tests: {remaining from {50% from alice, 50% from charlie}} [USD 100] bob
+  let initState = mkState [("alice", "USD", 1000), ("charlie", "USD", 1000), ("bob", "USD", 0)]
+  let nestedSource = SMultiple [SConnPerc (Perc 50) (SSingle "alice"), SConnPerc (Perc 50) (SSingle "charlie")]
+  let stm = SSend (SMultiple [SConnRem nestedSource]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 950 USD (1000 - 50)" 950 aliceBalance
+      assertEqual "Charlie should have 950 USD (1000 - 50)" 950 charlieBalance
+      assertEqual "Bob should have 100 USD" 100 bobBalance
+    Left err -> assertFailure $ "Nested sources test failed: " ++ show err
+
+testNestedDestinations :: Test
+testNestedDestinations = TestCase $ do
+  -- Test nested destinations: DMultiple containing another DMultiple
+  -- This tests: send alice [USD 100] {50% to {remaining to bob, remaining to charlie}, 50% to david}
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let nestedDest = DMultiple [DConnPerc (Perc 50) (DSingle "bob"), DConnPerc (Perc 50) (DSingle "charlie")]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Perc 50) nestedDest, DConnPerc (Perc 50) (DSingle "david")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 50 USD (gets all remaining from nested 50%)" 25 bobBalance
+      assertEqual "Charlie should have 0 USD (no remaining left)" 25 charlieBalance
+      assertEqual "David should have 50 USD (50% of total)" 50 davidBalance
+    Left err -> assertFailure $ "Nested destinations test failed: " ++ show err
+
+testDeeplyNestedSources :: Test
+testDeeplyNestedSources = TestCase $ do
+  -- Test deeply nested sources: SMultiple containing SMultiple containing SMultiple
+  -- This tests: {max 30 from {remaining from {50% from alice, 50% from charlie}}} [USD 30] bob
+  let initState = mkState [("alice", "USD", 1000), ("charlie", "USD", 1000), ("tom", "USD", 1000), ("bob", "USD", 0)]
+  let innerSource = SMultiple [SConnPerc (Perc 50) (SSingle "alice"), SConnPerc (Perc 50) (SSingle "charlie")]
+  let middleSource = SMultiple [SConnRem innerSource]
+  let stm = SSend (SMultiple [SConnMax 30 middleSource, SConnPerc (Rat 1 3) (SSingle "tom")]) (Coin "USD" 30) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let tomBalance = case Map.lookup "tom" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 985 USD (1000 - 15)" 990 aliceBalance
+      assertEqual "Charlie should have 985 USD (1000 - 15)" 990 charlieBalance
+      assertEqual "Tom should have 985 USD (1000 - 15)" 990 tomBalance
+      assertEqual "Bob should have 30 USD" 30 bobBalance
+    Left err -> assertFailure $ "Deeply nested sources test failed: " ++ show err
+
+testNestedSourcesWithInsufficientFunds :: Test
+testNestedSourcesWithInsufficientFunds = TestCase $ do
+  -- Test nested sources that don't provide enough funds
+  -- Alice has 20, Charlie has 20, but we need 100 total
+  let initState = mkState [("alice", "USD", 20), ("charlie", "USD", 20), ("bob", "USD", 0)]
+  let nestedSource = SMultiple [SConnRem (SSingle "alice"), SConnRem (SSingle "charlie")]
+  let stm = SSend (SMultiple [SConnRem nestedSource]) (Coin "USD" 100) (DSingle "bob")
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with insufficient funds in nested sources"
+    Left _ -> return () -- Expected error
+
+testNestedDestinationsWithIncompleteConsumption :: Test
+testNestedDestinationsWithIncompleteConsumption = TestCase $ do
+  -- Test nested destinations that don't consume the full amount
+  -- Send 100 USD, but nested destinations only consume 60 USD (50% + 10% = 60%)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let nestedDest = DMultiple [DConnPerc (Perc 50) (DSingle "bob"), DConnPerc (Perc 10) (DSingle "charlie")]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnRem nestedDest])
+  case runEvalWithState stm initState of
+    Right _ -> assertFailure "Should fail with incomplete consumption in nested destinations"
+    Left _ -> return () -- Expected error
+
 -- Test suite
 tests :: Test
 tests = TestList
@@ -323,6 +651,25 @@ tests = TestList
   , TestLabel "Percentage Validation" testPercentageValidation
   , TestLabel "File Parsing" testFileParsing
   , TestLabel "Complete Example" testCompleteExample
+  , TestLabel "Multiple Coins" testMultipleCoins
+  , TestLabel "Insufficient Funds" testInsufficientFunds
+  , TestLabel "Zero Amount" testZeroAmount
+  , TestLabel "Complex Percentage" testComplexPercentage
+  , TestLabel "Max Amount" testMaxAmount
+  , TestLabel "Remaining Amount" testRemainingAmount
+  , TestLabel "Complex Transaction Chain" testComplexTransactionChain
+  , TestLabel "Account Creation" testAccountCreation
+  , TestLabel "Multiple Destinations with Remaining" testMultipleDestinationsWithRemaining
+  , TestLabel "Insufficient Source Amount" testInsufficientSourceAmount
+  , TestLabel "Insufficient Source Amount Percentage" testInsufficientSourceAmountPercentage
+  , TestLabel "Insufficient Source Amount Max" testInsufficientSourceAmountMax
+  , TestLabel "Incomplete Destination Consumption" testIncompleteDestinationConsumption
+  , TestLabel "Incomplete Destination Consumption Percentage" testIncompleteDestinationConsumptionPercentage
+  , TestLabel "Nested Sources" testNestedSources
+  , TestLabel "Nested Destinations" testNestedDestinations
+  , TestLabel "Deeply Nested Sources" testDeeplyNestedSources
+  , TestLabel "Nested Sources with Insufficient Funds" testNestedSourcesWithInsufficientFunds
+  , TestLabel "Nested Destinations with Incomplete Consumption" testNestedDestinationsWithIncompleteConsumption
   ]
 
 -- Main test runner
