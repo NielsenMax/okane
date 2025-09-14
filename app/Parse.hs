@@ -76,7 +76,7 @@ src =
   ( do
       SSingle <$> identifier
   )
-    <|> ( do
+    <|> braces ( do
             conns <- sepBy1 srcConnector (reservedOp ",")
             return $ SMultiple conns
         )
@@ -106,7 +106,7 @@ dst =
   ( do
       DSingle <$> identifier
   )
-    <|> ( do
+    <|> braces ( do
             conns <- sepBy1 dstConnector (reservedOp ",")
             return $ DMultiple conns
         )

@@ -1,1 +1,4 @@
-account maxi usd 100000
+account tom usd 100000
+
+send tom [usd 100] {50% to maxi, remaining to alice}
+send {1/2 from maxi, max 25 from tom} [usd 100] alice

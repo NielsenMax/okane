@@ -2,11 +2,15 @@ module Main where
 
 import System.Console.Haskeline
 import Parse (runP, term, parseFile)
-import Eval (runEval, runEvalWithState, runEvalStatements, showAccounts, initAccount, initialState, EvalState(..), saveAccountsToDSLFile)
-import Data.List (isPrefixOf)
+import Eval (runEval, runEvalWithState, runEvalStatements, showAccounts, initialState, EvalState(..), saveAccountsToDSLFile)
+import Data.List ( isPrefixOf, dropWhileEnd )
 import System.IO (readFile)
 import Control.Exception (catch, IOException)
 import Control.Monad.IO.Class (liftIO)
+import Data.Char (isSpace)
+
+trim :: String -> String
+trim = dropWhileEnd isSpace . dropWhile isSpace
 
 main :: IO ()
 main = runInputT defaultSettings (loop initialState)
@@ -43,14 +47,14 @@ main = runInputT defaultSettings (loop initialState)
             ":quit" -> outputStrLn "Goodbye!"
             ":accounts" -> do
               outputStrLn "Current account balances:"
-              outputStrLn $ showAccounts (accounts state)
+              outputStrLn $ showAccounts state
               loop state
             _ -> do
               if ":load " `isPrefixOf` input
                 then do
                   let filename = drop 6 input  -- Remove ":load " prefix
                   result <- liftIO $ catch (do
-                    content <- readFile filename
+                    content <- readFile $ trim filename
                     return $ Right content
                     ) (\e -> return $ Left (e :: IOException))
                   case result of
@@ -65,7 +69,7 @@ main = runInputT defaultSettings (loop initialState)
                             Right newState -> do
                               outputStrLn "✓ File executed successfully!"
                               outputStrLn "Updated account balances:"
-                              outputStrLn $ showAccounts (accounts newState)
+                              outputStrLn $ showAccounts newState
                               loop newState
                             Left err -> do
                               outputStrLn "✗ Execution error:"
@@ -78,7 +82,7 @@ main = runInputT defaultSettings (loop initialState)
                 else if ":save " `isPrefixOf` input
                   then do
                     let filename = drop 6 input  -- Remove ":save " prefix
-                    result <- liftIO $ saveAccountsToDSLFile filename (accounts state)
+                    result <- liftIO $ saveAccountsToDSLFile filename state
                     case result of
                       Right _ -> do
                         outputStrLn $ "✓ Accounts saved to " ++ filename ++ " in DSL format"
@@ -95,7 +99,7 @@ main = runInputT defaultSettings (loop initialState)
                             Right newState -> do
                               outputStrLn "✓ Executed successfully!"
                               outputStrLn "Updated account balances:"
-                              outputStrLn $ showAccounts (accounts newState)
+                              outputStrLn $ showAccounts newState
                               loop newState
                             Left err -> do
                               outputStrLn "✗ Execution error:"
