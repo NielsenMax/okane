@@ -28,6 +28,7 @@ data Dst var
 -- | Connector for multiple destinations
 data DstConnector var
   = DConnPerc Perc (Dst var)       -- Percentage of a destination
+  | DConnMax Int (Dst var)         -- Max amount to a destination
   | DConnRem (Dst var)             -- Remaining to a destination
   deriving (Show, Functor, Eq)
 

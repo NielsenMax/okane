@@ -45,7 +45,7 @@ processSrc accounts (SMultiple connectors) c@(Coin coinName amount) = let
   in foldM (processSrcConnector c) (accounts, amount) $ sorted ++ maxs
   where f (SConnMax _ _) = False
         f _ = True
-        g (SConnPerc _ _) = False
+        g (SConnRem _) = False
         g _ = True
 
 processSrcConnector :: Coin -> (EvalState, Int) -> SrcConnector String -> Either EvalError (EvalState, Int)
@@ -73,13 +73,22 @@ processDest (DSingle account) (Coin coinName amount) accounts = do
       accountBalance = Map.findWithDefault 0 coinName accountMap
   return (Map.insert account (Map.insert coinName (accountBalance + amount) accountMap) accounts, 0)
 processDest (DMultiple connectors) c@(Coin coinName amount) accounts = let
-  sorted = uncurry (++) $ partition f connectors
-  in foldM (processDestConnector c) (accounts, amount) sorted
+  (cs, rems) = partition f connectors
+  sorted = uncurry (++) $ partition g cs
+  in foldM (processDestConnector c) (accounts, amount) $ sorted ++ rems
   where f (DConnRem _) = False
         f _ = True
+        g (DConnMax _ _) = False
+        g _ = True
 
 processDestConnector :: Coin -> (EvalState, Int) -> DstConnector String -> Either EvalError (EvalState, Int)
 processDestConnector (Coin coinName _) (accounts, remaining) (DConnRem destination) = processDest destination (Coin coinName remaining) accounts
+processDestConnector (Coin coinName _) (accounts, remaining) (DConnMax maxAmount destination) = do
+  let amount = min maxAmount remaining
+  result <- processDest destination (Coin coinName amount) accounts
+  case result of
+    (newAccounts, remaining2) | remaining2 == 0 -> return (newAccounts, remaining - amount + remaining2)
+                             | otherwise -> Left $ EvalError "Wrong destination expression"
 processDestConnector (Coin coinName amount) (accounts, remaining) (DConnPerc perc destination) = do
   parsedAmount <- calcPercentage perc amount
   result <- if parsedAmount > remaining then Left $ EvalError "Wrong destination expression" else processDest destination (Coin coinName parsedAmount) accounts

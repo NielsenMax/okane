@@ -118,6 +118,12 @@ dstConnector =
   reserved "to"
   DConnPerc p <$> dst)
     <|> ( do
+            reserved "max"
+            n <- num
+            reserved "to"
+            DConnMax n <$> dst
+        )
+    <|> ( do
             reserved "remaining"
             reserved "to"
             DConnRem <$> dst

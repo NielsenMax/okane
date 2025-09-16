@@ -636,6 +636,236 @@ testNestedDestinationsWithIncompleteConsumption = TestCase $ do
     Right _ -> assertFailure "Should fail with incomplete consumption in nested destinations"
     Left _ -> return () -- Expected error
 
+testDestinationMaxAmount :: Test
+testDestinationMaxAmount = TestCase $ do
+  -- Test DConnMax: send 100 USD, but destinations have max limits
+  -- 50% to bob (50 USD), max 30 to charlie (30 USD), remaining to david (20 USD)
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Perc 50) (DSingle "bob"), DConnMax 30 (DSingle "charlie"), DConnRem (DSingle "david")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 50 USD (50%)" 50 bobBalance
+      assertEqual "Charlie should have 30 USD (max 30)" 30 charlieBalance
+      assertEqual "David should have 20 USD (remaining)" 20 davidBalance
+    Left err -> assertFailure $ "Destination max amount test failed: " ++ show err
+
+testDestinationMaxAmountWithMultipleMax :: Test
+testDestinationMaxAmountWithMultipleMax = TestCase $ do
+  -- Test multiple DConnMax: send 100 USD
+  -- max 20 to bob, max 30 to charlie, max 25 to david, remaining to eve
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0), ("eve", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnMax 20 (DSingle "bob"), DConnMax 30 (DSingle "charlie"), DConnMax 25 (DSingle "david"), DConnRem (DSingle "eve")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let eveBalance = case Map.lookup "eve" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 20 USD (max 20)" 20 bobBalance
+      assertEqual "Charlie should have 30 USD (max 30)" 30 charlieBalance
+      assertEqual "David should have 25 USD (max 25)" 25 davidBalance
+      assertEqual "Eve should have 25 USD (remaining: 100-20-30-25=25)" 25 eveBalance
+    Left err -> assertFailure $ "Multiple destination max amount test failed: " ++ show err
+
+testDestinationMaxAmountWithInsufficientRemaining :: Test
+testDestinationMaxAmountWithInsufficientRemaining = TestCase $ do
+  -- Test DConnMax with insufficient remaining: send 50 USD
+  -- max 30 to bob, max 30 to charlie, remaining to david
+  -- Bob gets 30, Charlie gets 20 (remaining), David gets 0
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 50) (DMultiple [DConnMax 30 (DSingle "bob"), DConnMax 30 (DSingle "charlie"), DConnRem (DSingle "david")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 950 USD" 950 aliceBalance
+      assertEqual "Bob should have 30 USD (max 30)" 30 bobBalance
+      assertEqual "Charlie should have 20 USD (remaining 20)" 20 charlieBalance
+      assertEqual "David should have 0 USD (no remaining)" 0 davidBalance
+    Left err -> assertFailure $ "Insufficient remaining max amount test failed: " ++ show err
+
+testDestinationMaxOnly :: Test
+testDestinationMaxOnly = TestCase $ do
+  -- Test only DConnMax destinations: send 100 USD
+  -- max 40 to bob, max 30 to charlie, max 25 to david, remaining to eve
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0), ("eve", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnMax 40 (DSingle "bob"), DConnMax 30 (DSingle "charlie"), DConnMax 25 (DSingle "david"), DConnRem (DSingle "eve")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let eveBalance = case Map.lookup "eve" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 40 USD (max 40)" 40 bobBalance
+      assertEqual "Charlie should have 30 USD (max 30)" 30 charlieBalance
+      assertEqual "David should have 25 USD (max 25)" 25 davidBalance
+      assertEqual "Eve should have 5 USD (remaining: 100-40-30-25=5)" 5 eveBalance
+    Left err -> assertFailure $ "Destination max only test failed: " ++ show err
+
+testDestinationMaxWithZeroRemaining :: Test
+testDestinationMaxWithZeroRemaining = TestCase $ do
+  -- Test DConnMax with exactly enough funds: send 75 USD
+  -- max 30 to bob, max 25 to charlie, max 20 to david, remaining to eve
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0), ("eve", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 75) (DMultiple [DConnMax 30 (DSingle "bob"), DConnMax 25 (DSingle "charlie"), DConnMax 20 (DSingle "david"), DConnRem (DSingle "eve")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let eveBalance = case Map.lookup "eve" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 925 USD" 925 aliceBalance
+      assertEqual "Bob should have 30 USD (max 30)" 30 bobBalance
+      assertEqual "Charlie should have 25 USD (max 25)" 25 charlieBalance
+      assertEqual "David should have 20 USD (max 20)" 20 davidBalance
+      assertEqual "Eve should have 0 USD (no remaining)" 0 eveBalance
+    Left err -> assertFailure $ "Destination max with zero remaining test failed: " ++ show err
+
+testDestinationMaxWithLargeMax :: Test
+testDestinationMaxWithLargeMax = TestCase $ do
+  -- Test DConnMax with max amounts larger than total: send 50 USD
+  -- max 100 to bob, max 80 to charlie, remaining to david
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 50) (DMultiple [DConnMax 100 (DSingle "bob"), DConnMax 80 (DSingle "charlie"), DConnRem (DSingle "david")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 950 USD" 950 aliceBalance
+      assertEqual "Bob should have 50 USD (all remaining, max 100)" 50 bobBalance
+      assertEqual "Charlie should have 0 USD (no remaining left)" 0 charlieBalance
+      assertEqual "David should have 0 USD (no remaining)" 0 davidBalance
+    Left err -> assertFailure $ "Destination max with large max test failed: " ++ show err
+
+testDestinationMaxWithNestedDestinations :: Test
+testDestinationMaxWithNestedDestinations = TestCase $ do
+  -- Test DConnMax with nested destinations: send 100 USD
+  -- 50% to {max 20 to bob, remaining to charlie}, max 30 to david, remaining to eve
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0), ("eve", "USD", 0)]
+  let nestedDest = DMultiple [DConnMax 20 (DSingle "bob"), DConnRem (DSingle "charlie")]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Perc 50) nestedDest, DConnMax 30 (DSingle "david"), DConnRem (DSingle "eve")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let eveBalance = case Map.lookup "eve" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 20 USD (max 20 from nested 50%)" 20 bobBalance
+      assertEqual "Charlie should have 30 USD (remaining from nested 50%)" 30 charlieBalance
+      assertEqual "David should have 30 USD (max 30)" 30 davidBalance
+      assertEqual "Eve should have 20 USD (remaining: 100-50-30=20)" 20 eveBalance
+    Left err -> assertFailure $ "Nested destination max test failed: " ++ show err
+
+testDestinationMaxWithFractionalPercentages :: Test
+testDestinationMaxWithFractionalPercentages = TestCase $ do
+  -- Test DConnMax with fractional percentages: send 100 USD
+  -- 1/3 to bob (33), max 20 to charlie, max 15 to david, remaining to eve
+  let initState = mkState [("alice", "USD", 1000), ("bob", "USD", 0), ("charlie", "USD", 0), ("david", "USD", 0), ("eve", "USD", 0)]
+  let stm = SSend (SSingle "alice") (Coin "USD" 100) (DMultiple [DConnPerc (Rat 1 3) (DSingle "bob"), DConnMax 20 (DSingle "charlie"), DConnMax 15 (DSingle "david"), DConnRem (DSingle "eve")])
+  case runEvalWithState stm initState of
+    Right result -> do
+      let aliceBalance = case Map.lookup "alice" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let bobBalance = case Map.lookup "bob" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let charlieBalance = case Map.lookup "charlie" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let davidBalance = case Map.lookup "david" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      let eveBalance = case Map.lookup "eve" result of
+            Just coins -> Map.findWithDefault 0 "USD" coins
+            Nothing -> 0
+      assertEqual "Alice should have 900 USD" 900 aliceBalance
+      assertEqual "Bob should have 33 USD (1/3 of 100)" 33 bobBalance
+      assertEqual "Charlie should have 20 USD (max 20)" 20 charlieBalance
+      assertEqual "David should have 15 USD (max 15)" 15 davidBalance
+      assertEqual "Eve should have 32 USD (remaining: 100-33-20-15=32)" 32 eveBalance
+    Left err -> assertFailure $ "Fractional percentage with max test failed: " ++ show err
+
 -- Test suite
 tests :: Test
 tests = TestList
@@ -670,6 +900,14 @@ tests = TestList
   , TestLabel "Deeply Nested Sources" testDeeplyNestedSources
   , TestLabel "Nested Sources with Insufficient Funds" testNestedSourcesWithInsufficientFunds
   , TestLabel "Nested Destinations with Incomplete Consumption" testNestedDestinationsWithIncompleteConsumption
+  , TestLabel "Destination Max Amount" testDestinationMaxAmount
+  , TestLabel "Multiple Destination Max Amount" testDestinationMaxAmountWithMultipleMax
+  , TestLabel "Destination Max Amount with Insufficient Remaining" testDestinationMaxAmountWithInsufficientRemaining
+  , TestLabel "Destination Max Only" testDestinationMaxOnly
+  , TestLabel "Destination Max with Zero Remaining" testDestinationMaxWithZeroRemaining
+  , TestLabel "Destination Max with Large Max" testDestinationMaxWithLargeMax
+  , TestLabel "Destination Max with Nested Destinations" testDestinationMaxWithNestedDestinations
+  , TestLabel "Destination Max with Fractional Percentages" testDestinationMaxWithFractionalPercentages
   ]
 
 -- Main test runner
